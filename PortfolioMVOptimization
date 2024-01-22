@@ -1,0 +1,92 @@
+import yfinance as yf
+import datetime
+import pandas as pd
+import numpy as np
+from scipy.optimize import minimize
+
+#Create a function that pulls stock data directly from Yahoo! Finance package
+def get_stock(ticker, start, end):
+    data = yf.download(ticker, start=start, end=end)
+    column_name = f'{ticker}_Close'
+    data[column_name] = data["Close"]
+    data = data[[column_name]]
+    return data
+
+# Function to combine stock data and create new dataframe with selected tickers
+def combine_stocks(tickers, start, end):
+    data_frames = [get_stock(ticker, start, end) for ticker in tickers]
+    df_merged = pd.concat(data_frames, axis=1)
+    print(df_merged.head())
+    return df_merged
+
+# Set start and end dates to analyst
+start_date = datetime.datetime(2019, 1, 1)
+end_date = datetime.datetime(2021, 1, 19)
+
+# List of stocks I chose, can be changed to any industry or select companies
+stocks = ["MRNA", "PFE", "JNJ"]
+
+# Use the Combine stock data function assigned before to create a portfolio
+portfolio = combine_stocks(stocks, start_date, end_date)
+
+# Calculate daily returns by using the .pct_change() function
+returns = portfolio.pct_change()
+
+# Drop all NaN values from the returns dataframe
+returns = returns.dropna()
+
+# Extract expected returns and covariance matrix
+mu = returns.mean().values
+S = returns.cov().values
+
+# Objective function for negative Sharpe ratio (to maximize Sharpe ratio)
+def objective(weights, mu, S):
+    portfolio_return = np.dot(mu, weights)
+    portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(S, weights)))
+    return -portfolio_return / portfolio_volatility
+
+# Constraints: weights sum to 1. That was all of the cash we have is allocated.
+constraints = ({'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1})
+
+# Bounds: weights between 0 and 1
+bounds = tuple((0, 1) for asset in range(len(mu)))
+
+# Initial guess: equal weights
+initial_weights = np.array(len(mu) * [1. / len(mu)])
+
+# Optimize for negative Sharpe ratio, min. negative and max. positive Sharpe Ratios
+result = minimize(objective, initial_weights, args=(mu, S),
+                  method='SLSQP', bounds=bounds, constraints=constraints)
+
+# Extract optimized weights
+weights = result.x
+
+# Display individual returns
+print("Individual Returns:")
+for i, stock in enumerate(stocks):
+    individual_return = np.dot(mu, weights) * weights[i]
+    print(f"{stock}: {individual_return:.4f}")
+
+# Display results
+print("\nOptimal weights:", weights)
+
+# Calculate portfolio performance
+portfolio_return = np.dot(mu, weights)
+portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(S, weights)))
+sharpe_ratio = portfolio_return / portfolio_volatility
+
+print("Portfolio Return:", portfolio_return)
+print("Portfolio Volatility:", portfolio_volatility)
+print("Sharpe Ratio:", sharpe_ratio)
+
+# Perform discrete allocation
+latest_prices = portfolio.iloc[-1].fillna(0).values
+
+# Check lengths before allocation
+if len(weights) != len(latest_prices) or not np.all(np.isfinite(weights)) or not np.all(np.isfinite(latest_prices)):
+    print("Error: Length mismatch or NaN/Infinity values detected. Discrete allocation skipped.")
+else:
+    # Perform discrete allocation
+    allocation = {asset: int(weight * 100000 / price) for asset, weight, price in
+                   zip(portfolio.columns, weights, latest_prices)}
+    print("\nDiscrete allocation:", allocation)
